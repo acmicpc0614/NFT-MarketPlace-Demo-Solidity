@@ -4,170 +4,219 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+// import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 contract InsurancePolicy is ERC721, Ownable {
-    // Mapping to store admin addresses
-    mapping(address => bool) public admins;
-    // Array to store the list of admin addresses
+    struct Policy {
+        string name;
+        uint256 cost;
+        string description;
+        bool exists;
+    }
+
+    struct PurchasedPolicy {
+        uint256 policyId;
+        string name;
+        uint256 cost;
+        string description;
+        uint256 startDate;
+        uint256 duration;
+        bool isActive;
+    }
+
+    struct Claim {
+        address sender;
+        uint256 policyId;
+    }
+
+    mapping(uint256 => Policy) public policies; // policyId => Policy
+    mapping(address => PurchasedPolicy[]) public purchasedPolicies; // buyer => PurchasedPolicy[]
+
+    Claim[] public claims; // List of claims
+    uint256[] public activePolicies; // List of active policies
     address[] public adminList;
 
-    // Event to log admin additions/removals
-    event AdminAdded(address indexed admin);
-    event AdminRemoved(address indexed admin);
+    event PolicyAdded(uint256 indexed policyId, string name, uint256 cost);
+    event PolicyRemoved(uint256 indexed policyId);
+    event PolicyPurchased(address indexed buyer, uint256 indexed policyId);
+    event ClaimSubmitted(address indexed buyer, uint256 indexed policyId);
+    event ClaimApproved(address indexed buyer, uint256 indexed policyId);
+    event ClaimDenied(address indexed buyer, uint256 indexed policyId);
 
-    // Function to add an admin
-    function addAdmin(address _admin) external onlyOwner {
-        require(!admins[_admin], "Address is already an admin");
-        admins[_admin] = true;
-        adminList.push(_admin); // Add to the admin list
-        emit AdminAdded(_admin);
-    }
+    uint256 public policyId = 0;
+    // uint256 public claimId = 0;
 
-    // Function to remove an admin
-    function removeAdmin(address _admin) external onlyOwner {
-        require(admins[_admin], "Address is not an admin");
-        delete admins[_admin];
-
-        // Remove from the admin list
-        for (uint256 i = 0; i < adminList.length; i++) {
-            if (adminList[i] == _admin) {
-                adminList[i] = adminList[adminList.length - 1]; // Move the last element into the deleted spot
-                adminList.pop(); // Remove the last element
-                break;
-            }
-        }
-
-        emit AdminRemoved(_admin);
-    }
-
-    // Function to check if an address is an admin
-    function isAdmin(address _admin) external view returns (bool) {
-        return admins[_admin];
-    }
-
-    // Function to get the list of all admins
-    function getAllAdmins() external view returns (address[] memory) {
-        return adminList;
-    }
-
-    // ------------------------------------------------     code for policy
-
-    struct Policy {
-        uint256 amount; // Amount paid for the policy
-        uint256 startDate; // Start date of the policy
-        uint256 duration; // Duration in seconds
-        bool isClaimed; // Claim status
-        bool isExpired; // Expiration status
-        string name; // Add the policy name field
-    }
-
-    mapping(uint256 => Policy) public policies;
-    mapping(address => uint256[]) public userPolicies;
-
-    uint256 public policyCounter;
-    // uint256 public DURATION = 365 * 24 * 60 * 60;
-    uint256 public DURATION = 10; // 10s
+    constructor() ERC721("InsurancePolicyNFT", "IPNFT") Ownable(msg.sender) {}
 
     // Custom USDC token interface
     address constant MAINNET_USDC = 0x036CbD53842c5426634e7929541eC2318f3dCF7e; // USDC address in Base Sepolia Testnet
     IERC20 public usdcToken = IERC20(MAINNET_USDC); // USDC contract address
 
-    event PolicyCreatedEvent();
-    event PolicyPurchased(
-        address indexed user,
-        uint256 indexed policyId,
-        uint256 amount
-    );
-    event ClaimSubmitted(uint256 indexed policyId);
-    event ClaimApproved(uint256 indexed policyId);
-
-    constructor() ERC721("InsurancePolicyNFT", "IPNFT") Ownable(msg.sender) {}
-
     function setUSDC(address _USDCaddress) external onlyOwner {
         usdcToken = IERC20(_USDCaddress);
     }
 
-    function createPolicy(
-        string memory name,
-        uint256 cost,
-        string memory description
-    ) external {
-        require(isAdmin(msg.sender) == true, "Only Admin can create policy");
-        uint256 policyId = policyCounter++;
-
-        policies[policyId] = Policy({
-            amount: amount,
-            startDate: block.timestamp,
-            duration: duration,
-            isClaimed: false,
-            isExpired: false,
-            name: name // Assign the policy name
-        });
+    modifier onlyAdmin() {
+        require(isAdmin(msg.sender), "Not an admin");
+        _;
     }
 
-    function buyPolicy(
-        string memory name,
-        uint256 amount,
-        uint256 duration
-    ) external {
-        require(amount > 0, "Amount must be greater than zero");
+    function isAdmin(address _address) public view returns (bool) {
+        // Check if the address is the owner
+        if (_address == owner()) {
+            return true;
+        }
 
-        // Transfer USDC tokens from the user to the contract
-        usdcToken.transferFrom(msg.sender, address(this), amount);
-
-        _mint(msg.sender, policyId);
-        userPolicies[msg.sender].push(policyId);
-
-        emit PolicyPurchased(msg.sender, policyId, amount);
+        // Check if the address is in the admin list
+        for (uint i = 0; i < adminList.length; i++) {
+            if (adminList[i] == _address) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    function submitClaim(uint256 policyId) external {
-        require(checkExpiration(policyId) == true, "Expiration must be true");
-        require(ownerOf(policyId) == msg.sender, "Not the policy owner");
-        require(!policies[policyId].isClaimed, "Claim already submitted");
-        require(!policies[policyId].isExpired, "Policy expired");
-
-        policies[policyId].isClaimed = true;
-        emit ClaimSubmitted(policyId);
+    function addAdmin(address _admin) external onlyOwner {
+        adminList.push(_admin);
     }
 
-    function approveClaim(uint256 policyId) external onlyOwner {
-        require(policies[policyId].isClaimed, "Claim not submitted");
-        require(!policies[policyId].isExpired, "Policy expired");
-
-        address _ownerId = ownerOf(policyId);
-
-        // Returns token to buyer
-        usdcToken.transfer(_ownerId, policies[policyId].amount);
-        _burn(policyId);
-
-        // Remove policy from policy list
-        policies[policyId] = policies[policyCounter - 1];
-        delete policies[policyCounter - 1];
-        policyCounter--;
-
-        // Remove policy from storage of UserPolicies
-        uint256[] storage tmpUserPolicies = userPolicies[_ownerId];
-        uint256 lengthOfTmp = tmpUserPolicies.length;
-        for (uint256 i = 0; i < lengthOfTmp; i++) {
-            if (tmpUserPolicies[i] == policyId) {
-                tmpUserPolicies[i] = tmpUserPolicies[lengthOfTmp - 1]; // Move the last element into the deleted spot
-                delete tmpUserPolicies[lengthOfTmp - 1];
+    function removeAdmin(address _admin) external onlyOwner {
+        for (uint i = 0; i < adminList.length; i++) {
+            if (adminList[i] == _admin) {
+                adminList[i] = adminList[adminList.length - 1];
+                adminList.pop();
                 break;
             }
         }
-
-        emit ClaimApproved(policyId);
     }
 
-    function checkExpiration(uint256 policyId) public view returns (bool) {
-        return
-            block.timestamp >=
-            policies[policyId].startDate + policies[policyId].duration;
+    function addPolicy(
+        string memory _name,
+        uint256 _cost,
+        string memory _description
+    ) external onlyAdmin {
+        policies[policyId] = Policy(_name, _cost, _description, true);
+        activePolicies.push(policyId);
+        emit PolicyAdded(policyId, _name, _cost);
+        policyId++;
     }
 
-    function transferPolicy(address to, uint256 policyId) external {
-        require(ownerOf(policyId) == msg.sender, "Not the policy owner");
-        safeTransferFrom(msg.sender, to, policyId);
+    function removePolicy(uint256 _policyId) external onlyAdmin {
+        delete policies[_policyId];
+        emit PolicyRemoved(_policyId);
+    }
+
+    function buyPolicy(uint256 _policyId) external {
+        Policy memory policy = policies[_policyId];
+        require(policy.exists, "Policy does not exist");
+        // require(msg.value == policy.cost, "Incorrect amount");
+
+        purchasedPolicies[msg.sender].push(
+            PurchasedPolicy(
+                _policyId,
+                policy.name,
+                policy.cost,
+                policy.description,
+                block.timestamp,
+                10,
+                true
+            )
+        );
+
+        usdcToken.transferFrom(msg.sender, address(this), policy.cost);
+
+        emit PolicyPurchased(msg.sender, _policyId);
+    }
+
+    function submitClaim(uint256 _policyId) external {
+        require(policies[_policyId].exists, "Policy does not exist");
+        require(
+            (isAvailableSubmitClaim((msg.sender), _policyId)) == true,
+            "Policy does not active"
+        );
+        claims.push(Claim(msg.sender, _policyId));
+        emit ClaimSubmitted(msg.sender, _policyId);
+    }
+    function isAvailableSubmitClaim(
+        address _address,
+        uint256 _policyId
+    ) private view returns (bool) {
+        for (uint256 i = 0; i < purchasedPolicies[_address].length; i++) {
+            PurchasedPolicy memory tmp = purchasedPolicies[_address][i];
+            if (tmp.policyId == _policyId) {
+                // Check if the policy has expired
+                if (tmp.startDate + tmp.duration > block.timestamp) {
+                    return true; // Policy is available for claim submission
+                } else {
+                    return false; // Policy is not available for claim submission
+                }
+            }
+        }
+        return false; // Policy ID not found
+    }
+
+    function approveClaim(uint256 _claimId) external onlyAdmin {
+        require(_claimId < claims.length, "Claim does not exist"); // Check if claim exists
+
+        address _buyer = claims[_claimId].sender; // Get the buyer's address
+        uint256 _policyId = claims[_claimId].policyId; // Store the policyId before removing the claim
+
+        // Transfer the cost to the buyer
+        usdcToken.transfer(_buyer, policies[_policyId].cost);
+
+        // Remove the purchased policy from the buyer's list
+        _removePurchasedPolicy(_buyer, _policyId);
+        // Remove the claim
+        _removeClaim(_claimId, _buyer, _policyId, true);
+    }
+
+    function denyClaim(uint256 _claimId) external onlyAdmin {
+        require(_claimId < claims.length, "Claim does not exist"); // Check if claim exists
+
+        address _buyer = claims[_claimId].sender; // Get the buyer's address
+        uint256 _policyId = claims[_claimId].policyId; // Store the policyId before removing the claim
+
+        // Remove the claim
+        _removeClaim(_claimId, _buyer, _policyId, false);
+    }
+
+    function _removePurchasedPolicy(address _buyer, uint256 _policyId) private {
+        PurchasedPolicy[] storage policiesList = purchasedPolicies[_buyer];
+
+        for (uint256 i = 0; i < policiesList.length; i++) {
+            if (policiesList[i].policyId == _policyId) {
+                // Replace the policy to be deleted with the last one and pop the last element
+                policiesList[i] = policiesList[policiesList.length - 1];
+                policiesList.pop();
+                break; // Exit the loop after removing the policy
+            }
+        }
+    }
+
+    function _removeClaim(
+        uint256 _claimId,
+        address _buyer,
+        uint256 _policyId,
+        bool isApproved
+    ) private {
+        // Replace the claim to be deleted with the last claim and remove the last one
+        claims[_claimId] = claims[claims.length - 1];
+        claims.pop(); // Remove the last claim
+
+        if (isApproved) {
+            emit ClaimApproved(_buyer, _policyId); // Emit approval event
+        } else {
+            emit ClaimDenied(_buyer, _policyId); // Emit denial event
+        }
+    }
+
+    function getActivePurchasedPolicies(
+        address _buyer
+    ) external view returns (PurchasedPolicy[] memory) {
+        return purchasedPolicies[_buyer];
+    }
+
+    function getClaims() external view returns (Claim[] memory) {
+        return claims;
     }
 }

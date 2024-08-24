@@ -4,23 +4,21 @@ import { expect } from "chai";
 
 let owner: any;
 let buyer1: any;
+let buyer2: any;
 let USDC: any;
 let USDCAddress: any;
-let NFT: any;
-let NFTAddress: any;
+let insurancePolicy: any;
+let insurancePolicyAddress: any;
 const NFT_uri: string = "ipfs://MyCustomInsurancePolicy";
 const DECIMAL = 0;
 const DURATION = 10;
 let START_TIME: number;
 
-const NAME_1 = "first";
-const NAME_2 = "second";
-
 describe("Create Initial Contracts of all types", function () {
   START_TIME = Date.now();
   console.log("\t\tTest Start Time", START_TIME);
   it("get accounts", async function () {
-    [owner, buyer1] = await ethers.getSigners();
+    [owner, buyer1, buyer2] = await ethers.getSigners();
     console.log("\tAccount address\t", await owner.getAddress());
   });
 
@@ -32,87 +30,128 @@ describe("Create Initial Contracts of all types", function () {
   });
 
   it("should deploy Policy Contract", async function () {
-    const instanceNFT = await ethers.getContractFactory("InsurancePolicy");
-    NFT = await instanceNFT.deploy();
-    NFTAddress = await NFT.getAddress();
-    console.log("\tPolicy Contract deployed at:", NFTAddress);
-    await NFT.setUSDC(USDCAddress);
+    const InsurancePolicy = await ethers.getContractFactory("InsurancePolicy");
+    insurancePolicy = await InsurancePolicy.deploy();
+    // await insurancePolicy.deployed();
+
+    insurancePolicyAddress = await insurancePolicy.getAddress();
+    console.log("\tPolicy Contract deployed at:", insurancePolicyAddress);
+    await insurancePolicy.setUSDC(USDCAddress);
   });
 });
 
 describe("Send USDC to buyers", async function () {
   it("start distributing FeeToken", async function () {
     await USDC.transfer(buyer1.address, ethers.parseUnits("100", DECIMAL));
+    await USDC.transfer(buyer2.address, ethers.parseUnits("200", DECIMAL));
+
     expect(await USDC.balanceOf(buyer1.address)).to.equal(
       ethers.parseUnits("100", DECIMAL)
     );
+    expect(await USDC.balanceOf(buyer2.address)).to.equal(
+      ethers.parseUnits("200", DECIMAL)
+    );
+
+    const SMBalance = await USDC.balanceOf(insurancePolicy);
+    console.log("\tContract balance: " + SMBalance);
     console.log("\tbuyer1 balance: " + (await USDC.balanceOf(buyer1)));
+    console.log("\tbuyer2 balance: " + (await USDC.balanceOf(buyer2)));
   });
 });
 
 describe("InsurancePolicy Contract", function () {
-  it("should allow user to buy a policy", async function () {
-    const amount = ethers.parseUnits("30", DECIMAL);
-    const amount2 = ethers.parseUnits("50", DECIMAL);
+  // it("should make buyer1 to admin", async function () {
+  //   await insurancePolicy.connect(owner).addAdmin(buyer1);
+  //   expect(await insurancePolicy.isAdmin(buyer1.address)).to.be.true;
+  // });
 
-    await USDC.connect(buyer1).approve(
-      NFTAddress,
+  it("should allow owner to add buyer1 as admin", async function () {
+    await insurancePolicy.addAdmin(buyer1.address);
+    expect(await insurancePolicy.isAdmin(buyer1.address)).to.be.true;
+  });
+
+  it("should allow owner to add a policy 'O1'", async function () {
+    const amount = ethers.parseUnits("10", DECIMAL);
+    await insurancePolicy.addPolicy("O1", amount, "Description of O1");
+    const policy = await insurancePolicy.policies(0);
+    expect(policy.name).to.equal("O1");
+    expect(policy.cost).to.equal(amount);
+    expect(policy.description).to.equal("Description of O1");
+  });
+
+  it("should allow buyer1 to add a policy 'B1'", async function () {
+    const amount = ethers.parseUnits("5", DECIMAL);
+    await insurancePolicy
+      .connect(buyer1)
+      .addPolicy("B1", amount, "Description of B1");
+    const policy = await insurancePolicy.policies(1);
+    expect(policy.name).to.equal("B1");
+    expect(policy.cost).to.equal(amount);
+    expect(policy.description).to.equal("Description of B1");
+  });
+
+  it("should allow buyer2 to buy policy 'O1'", async function () {
+    await USDC.connect(buyer2).approve(
+      insurancePolicyAddress,
       ethers.parseUnits("100", DECIMAL)
     );
-    // User buys a policy
-    await NFT.connect(buyer1).buyPolicy(NAME_1, amount, DURATION);
-    await NFT.connect(buyer1).buyPolicy(NAME_2, amount2, DURATION);
+    await insurancePolicy.connect(buyer2).buyPolicy(0);
 
-    // Check policy details
-    const policy = await NFT.policies(0);
-    expect(policy.amount).to.equal(amount);
-    expect(policy.startDate).to.be.greaterThan(0);
-    expect(policy.duration).to.equal(DURATION); // 1 year in seconds
-    expect(policy.isClaimed).to.be.false;
-    expect(policy.isExpired).to.be.false;
+    const purchasedPolicies = await insurancePolicy.getActivePurchasedPolicies(
+      buyer2.address
+    );
+    expect(purchasedPolicies.length).to.equal(1);
+    expect(purchasedPolicies[0].name).to.equal("O1");
   });
 
-  it("should allow user to submit a claim", async function () {
-    // User submits a claim
-    await ethers.provider.send("evm_increaseTime", [DURATION * 2]); // 20 s
-    await ethers.provider.send("evm_mine"); // Mine the next block
-    console.log("\t\tTime is flowing for test, 20s");
-    await NFT.connect(buyer1).submitClaim(0);
+  it("should allow buyer2 to buy policy 'B1'", async function () {
+    await insurancePolicy.connect(buyer2).buyPolicy(1);
 
-    const policy = await NFT.policies(0);
-    expect(policy.isClaimed).to.be.true;
+    const purchasedPolicies = await insurancePolicy.getActivePurchasedPolicies(
+      buyer2.address
+    );
+    expect(purchasedPolicies.length).to.equal(2);
+    expect(purchasedPolicies[1].name).to.equal("B1");
   });
 
-  it("should allow owner to approve a claim", async function () {
-    // Owner approves the claim
+  it("should allow buyer2 to submit a claim for a policy", async function () {
+    await insurancePolicy.connect(buyer2).submitClaim(0);
+    // await ethers.provider.send("evm_increaseTime", [DURATION * 2]); // 20 s
+    // await ethers.provider.send("evm_mine"); // Mine the next block
+    // console.log("\t\tTime is flowing for test, 20s");
+    await insurancePolicy.connect(buyer2).submitClaim(1);
 
-    await NFT.connect(owner).approveClaim(0);
-    const policy_2 = await NFT.policies(0);
-    expect(policy_2.isExpired).to.be.false; // Ensure policy is not expired
-    // Check that USDC has been transferred to buyer1
-    const userBalance = await USDC.balanceOf(buyer1.address);
-    expect(userBalance).to.equal(ethers.parseUnits("50", DECIMAL)); // 100 - 30 - 50 + 30 = 50
+    const claims = await insurancePolicy.getClaims();
+    expect(claims.length).to.equal(2);
+    expect(claims[0].sender).to.equal(buyer2.address);
+    expect(claims[0].policyId).to.equal(0);
   });
 
-  it("check Policies count", async function () {
-    const count = await NFT.policyCounter();
-    count === 1
-      ? console.log("\t\tThere is still " + count + " policy.")
-      : console.log("\t\tThere are still " + count + " policies.");
+  it("should allow buyer1 to approve buyer2's claim", async function () {
+    await insurancePolicy.connect(buyer1).approveClaim(0);
+    const claims = await insurancePolicy.getClaims();
+    expect(claims.length).to.equal(1); // Claim should be removed after approval
+  });
 
-    for (let i = 0; i < count; i++) {
-      const policy = await NFT.policies(i);
-      console.log(`\t${i + 1}th policy: ` + policy.name + " " + policy.amount);
-    }
+  it("should allow buyer1 to deny buyer2's claim", async function () {
+    await insurancePolicy.connect(buyer1).denyClaim(0);
+    const claims = await insurancePolicy.getClaims();
+    expect(claims.length).to.equal(0); // Claim should be removed after denial
+  });
+
+  it("should remove policy from owner", async function () {
+    await insurancePolicy.removePolicy(0);
+    const policies = await insurancePolicy.getActivePurchasedPolicies(buyer2);
+    expect(policies.length).to.equal(1); // Policy should be removed after removal by owner
   });
 
   it("check USDC balance", async function () {
-    const SMBalance = await USDC.balanceOf(NFT);
-    expect(SMBalance).to.equal(ethers.parseUnits("50", DECIMAL));
+    const SMBalance = await USDC.balanceOf(insurancePolicy);
+    expect(SMBalance).to.equal(ethers.parseUnits("5", DECIMAL)); // 10 + 5 - 10
 
     console.log("\tContract balance: " + SMBalance);
     console.log("\tBuyer1 balance: " + (await USDC.balanceOf(buyer1)));
-
+    console.log("\tBuyer2 balance: " + (await USDC.balanceOf(buyer2))); // 200 - 10 - 50 + 10
     console.log("\n\t\tTest End Time", Date.now());
     console.log("\t\tTest Duration", Date.now() - START_TIME, "ms");
   });

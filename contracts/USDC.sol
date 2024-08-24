@@ -9,7 +9,7 @@ contract USDCToken is ERC20 {
     }
 
     function decimals() public view override returns (uint8) {
-        return 6;
+        return 1;
     }
 
     function mint(address account, uint256 amount) public {

@@ -1,5 +1,4 @@
 import { ethers } from "hardhat";
-import { time } from "@nomicfoundation/hardhat-network-helpers";
 import { expect } from "chai";
 
 let owner: any;
@@ -10,7 +9,7 @@ let USDCAddress: any;
 let insurancePolicy: any;
 let insurancePolicyAddress: any;
 const NFT_uri: string = "ipfs://MyCustomInsurancePolicy";
-const DECIMAL = 0;
+const DECIMAL = 6;
 const DURATION = 10;
 let START_TIME: number;
 
@@ -60,11 +59,6 @@ describe("Send USDC to buyers", async function () {
 });
 
 describe("InsurancePolicy Contract", function () {
-  // it("should make buyer1 to admin", async function () {
-  //   await insurancePolicy.connect(owner).addAdmin(buyer1);
-  //   expect(await insurancePolicy.isAdmin(buyer1.address)).to.be.true;
-  // });
-
   it("should allow owner to add buyer1 as admin", async function () {
     await insurancePolicy.addAdmin(buyer1.address);
     expect(await insurancePolicy.isAdmin(buyer1.address)).to.be.true;

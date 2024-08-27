@@ -63,7 +63,6 @@ describe("InsurancePolicy Contract", function () {
     await insurancePolicy.addAdmin(buyer1.address);
     expect(await insurancePolicy.isAdmin(buyer1.address)).to.be.true;
   });
-
   it("should allow owner to add a policy 'O1'", async function () {
     const amount = ethers.parseUnits("10", DECIMAL);
     await insurancePolicy.addPolicy("O1", amount, "Description of O1");
